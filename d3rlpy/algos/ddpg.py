@@ -101,6 +101,7 @@ class DDPG(AlgoBase):
         eval_results_ (dict): evaluation results.
 
     """
+
     def __init__(self,
                  *,
                  actor_learning_rate=3e-4,
@@ -126,6 +127,8 @@ class DDPG(AlgoBase):
                  encoder_params={},
                  dynamics=None,
                  impl=None,
+                 min_q_target=None,
+                 max_q_target=None,
                  **kwargs):
         super().__init__(batch_size=batch_size,
                          n_frames=n_frames,
@@ -150,6 +153,8 @@ class DDPG(AlgoBase):
         self.encoder_params = encoder_params
         self.use_gpu = check_use_gpu(use_gpu)
         self.impl = impl
+        self.min_q_target = min_q_target
+        self.max_q_target = max_q_target
 
     def create_impl(self, observation_shape, action_size):
         self.impl = DDPGImpl(
@@ -179,7 +184,10 @@ class DDPG(AlgoBase):
                                               batch.actions,
                                               batch.next_rewards,
                                               batch.next_observations,
-                                              batch.terminals)
+                                              batch.terminals,
+                                              min_q_target=self.min_q_target,
+                                              max_q_target=self.max_q_target,
+                                              )
         actor_loss = self.impl.update_actor(batch.observations)
         self.impl.update_critic_target()
         self.impl.update_actor_target()

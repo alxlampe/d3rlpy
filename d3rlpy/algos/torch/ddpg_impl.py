@@ -84,15 +84,26 @@ class DDPGImpl(TorchImplBase):
         self.actor_optim = self.actor_optim_factory.create(
             self.policy.parameters(), lr=self.actor_learning_rate)
 
+    def _clip_q_target(self, q_tp1, rew_tp1, min_q_target, max_q_target):
+        q_target = self.gamma * q_tp1 + rew_tp1
+        if min_q_target is not None:
+            q_target[q_target < min_q_target] = min_q_target
+        if max_q_target is not None:
+            q_target[q_target > max_q_target] = max_q_target
+        q_tp1_clipped = (q_target - rew_tp1) / self.gamma
+        return q_tp1_clipped
+
     @train_api
     @torch_api(scaler_targets=['obs_t', 'obs_tp1'])
-    def update_critic(self, obs_t, act_t, rew_tp1, obs_tp1, ter_tp1):
+    def update_critic(self, obs_t, act_t, rew_tp1, obs_tp1, ter_tp1, min_q_target=None, max_q_target=None):
         q_tp1 = compute_augmentation_mean(augmentation=self.augmentation,
                                           n_augmentations=self.n_augmentations,
                                           func=self.compute_target,
                                           inputs={'x': obs_tp1},
                                           targets=['x'])
         q_tp1 *= (1.0 - ter_tp1)
+
+        q_tp1 = self._clip_q_target(q_tp1, rew_tp1, min_q_target=min_q_target, max_q_target=max_q_target)
 
         loss = compute_augmentation_mean(augmentation=self.augmentation,
                                          n_augmentations=self.n_augmentations,
@@ -133,7 +144,7 @@ class DDPGImpl(TorchImplBase):
     def _compute_actor_loss(self, obs_t):
         action, raw_action = self.policy(obs_t, with_raw=True)
         q_t = self.q_func(obs_t, action, 'min')
-        penalty = self.reguralizing_rate * (raw_action**2).mean()
+        penalty = self.reguralizing_rate * (raw_action ** 2).mean()
         return -q_t.mean() + penalty
 
     def compute_target(self, x):

@@ -138,6 +138,7 @@ class CQL(AlgoBase):
         eval_results_ (dict): evaluation results.
 
     """
+
     def __init__(self,
                  *,
                  actor_learning_rate=3e-5,
@@ -169,6 +170,8 @@ class CQL(AlgoBase):
                  n_augmentations=1,
                  dynamics=None,
                  impl=None,
+                 min_q_target=None,
+                 max_q_target=None,
                  **kwargs):
         super().__init__(batch_size=batch_size,
                          n_frames=n_frames,
@@ -199,6 +202,8 @@ class CQL(AlgoBase):
         self.n_augmentations = n_augmentations
         self.use_gpu = check_use_gpu(use_gpu)
         self.impl = impl
+        self.min_q_target = min_q_target
+        self.max_q_target = max_q_target
 
     def create_impl(self, observation_shape, action_size):
         self.impl = CQLImpl(observation_shape=observation_shape,
@@ -234,7 +239,11 @@ class CQL(AlgoBase):
                                               batch.actions,
                                               batch.next_rewards,
                                               batch.next_observations,
-                                              batch.terminals)
+                                              batch.terminals,
+                                              min_q_target=self.min_q_target,
+                                              max_q_target=self.max_q_target,
+                                              )
+
         if total_step % self.update_actor_interval == 0:
             actor_loss = self.impl.update_actor(batch.observations)
             temp_loss, temp = self.impl.update_temp(batch.observations)
@@ -329,6 +338,7 @@ class DiscreteCQL(DoubleDQN):
         eval_results_ (dict): evaluation results.
 
     """
+
     def create_impl(self, observation_shape, action_size):
         self.impl = DiscreteCQLImpl(observation_shape=observation_shape,
                                     action_size=action_size,

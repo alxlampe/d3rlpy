@@ -109,6 +109,7 @@ class TD3(AlgoBase):
         eval_results_ (dict): evaluation results.
 
     """
+
     def __init__(self,
                  *,
                  actor_learning_rate=3e-4,
@@ -137,6 +138,8 @@ class TD3(AlgoBase):
                  encoder_params={},
                  dynamics=None,
                  impl=None,
+                 min_q_target=None,
+                 max_q_target=None,
                  **kwargs):
         super().__init__(batch_size=batch_size,
                          n_frames=n_frames,
@@ -164,6 +167,8 @@ class TD3(AlgoBase):
         self.encoder_params = encoder_params
         self.use_gpu = check_use_gpu(use_gpu)
         self.impl = impl
+        self.min_q_target = min_q_target
+        self.max_q_target = max_q_target
 
     def create_impl(self, observation_shape, action_size):
         self.impl = TD3Impl(observation_shape=observation_shape,
@@ -194,7 +199,10 @@ class TD3(AlgoBase):
                                               batch.actions,
                                               batch.next_rewards,
                                               batch.next_observations,
-                                              batch.terminals)
+                                              batch.terminals,
+                                              min_q_target=self.min_q_target,
+                                              max_q_target=self.max_q_target,
+                                              )
         # delayed policy update
         if total_step % self.update_actor_interval == 0:
             actor_loss = self.impl.update_actor(batch.observations)
