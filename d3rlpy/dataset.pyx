@@ -12,14 +12,12 @@ from libcpp cimport bool
 from libcpp.memory cimport make_shared, shared_ptr
 from dataset cimport CTransition
 
-
 def _safe_size(array):
     if isinstance(array, (list, tuple)):
         return len(array)
     elif isinstance(array, np.ndarray):
         return array.shape[0]
     raise ValueError
-
 
 def _to_episodes(observation_shape, action_size, observations, actions,
                  rewards, terminals):
@@ -36,9 +34,8 @@ def _to_episodes(observation_shape, action_size, observations, actions,
             head_index = i + 1
     return rets
 
-
 def _to_transitions(observation_shape, action_size, observations, actions,
-                    rewards):
+                    rewards, terminals):
     rets = []
     num_data = _safe_size(observations)
     prev_transition = None
@@ -49,8 +46,9 @@ def _to_transitions(observation_shape, action_size, observations, actions,
         next_observation = observations[i + 1]
         next_action = actions[i + 1]
         next_reward = rewards[i + 1]
-        terminal = 1.0 if i == num_data - 2 else 0.0
-
+        terminal = terminals[i + 1]
+        if terminal and i + 1 < num_data:
+            raise RuntimeError("Terminal inside episode not allowed")
         transition = Transition(observation_shape=observation_shape,
                                 action_size=action_size,
                                 observation=observation,
@@ -362,7 +360,7 @@ class MDPDataset:
             if self.discrete_action:
                 assert int(action) < self.get_action_size()
             else:
-                assert action.shape == (self.get_action_size(), )
+                assert action.shape == (self.get_action_size(),)
 
         # append observations
         self._observations = np.vstack([self._observations, observations])
@@ -512,7 +510,7 @@ class Episode:
 
     """
     def __init__(self, observation_shape, action_size, observations, actions,
-                 rewards):
+                 rewards, terminals):
         # validation
         assert isinstance(observations, np.ndarray)
         if len(observation_shape) == 3:
@@ -532,6 +530,7 @@ class Episode:
         self._observations = observations
         self._actions = actions
         self._rewards = np.asarray(rewards, dtype=np.float32)
+        self._terminals = np.asarray(terminals, dtype=np.float32)
         self._transitions = None
 
     @property
@@ -589,7 +588,8 @@ class Episode:
             action_size=self.action_size,
             observations=self._observations,
             actions=self._actions,
-            rewards=self._rewards)
+            rewards=self._rewards,
+            terminals=self._terminals)
 
     def size(self):
         """ Returns the number of transitions.
@@ -645,7 +645,6 @@ ctypedef np.uint8_t UINT8_t
 ctypedef np.float32_t FLOAT_t
 ctypedef np.int32_t INT_t
 ctypedef shared_ptr[CTransition] TransitionPtr
-
 
 cdef class Transition:
     """ Transition class.
@@ -908,7 +907,6 @@ cdef class Transition:
         self._thisptr.get().prev_transition = <TransitionPtr> nullptr
         self._thisptr.get().next_transition = <TransitionPtr> nullptr
 
-
 def trace_back_and_clear(transition):
     """ Traces transitions and clear all links.
 
@@ -923,14 +921,13 @@ def trace_back_and_clear(transition):
         transition.clear_links()
         transition = prev_transition
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef void _stack_frames(TransitionPtr transition,
-                        UINT8_t* stack,
+                        UINT8_t*stack,
                         int n_frames,
                         bool stack_next=False) nogil:
-    cdef UINT8_t* observation_ptr
+    cdef UINT8_t*observation_ptr
     cdef int c = transition.get().observation_shape[0]
     cdef int h = transition.get().observation_shape[1]
     cdef int w = transition.get().observation_shape[2]
@@ -963,7 +960,6 @@ cdef void _stack_frames(TransitionPtr transition,
                 memcpy(stack + head_channel * h * w, t.get().observation_i, image_size)
             break
         t = t.get().prev_transition
-
 
 cdef class TransitionMiniBatch:
     """ mini-batch of Transition objects.
@@ -1048,14 +1044,14 @@ cdef class TransitionMiniBatch:
         is_discrete = not isinstance(transitions[0].action, np.ndarray)
 
         # prepare pointers to batch data
-        cdef void* observations_ptr = self._observations.data
-        cdef void* actions_ptr = self._actions.data
-        cdef FLOAT_t* rewards_ptr = <FLOAT_t*> self._rewards.data
-        cdef void* next_observations_ptr = self._next_observations.data
-        cdef void* next_actions_ptr = self._next_actions.data
-        cdef FLOAT_t* next_rewards_ptr = <FLOAT_t*> self._next_rewards.data
-        cdef FLOAT_t* terminals_ptr = <FLOAT_t*> self._terminals.data
-        cdef FLOAT_t* n_steps_ptr = <FLOAT_t*> self._n_steps.data
+        cdef void*observations_ptr = self._observations.data
+        cdef void*actions_ptr = self._actions.data
+        cdef FLOAT_t*rewards_ptr = <FLOAT_t*> self._rewards.data
+        cdef void*next_observations_ptr = self._next_observations.data
+        cdef void*next_actions_ptr = self._next_actions.data
+        cdef FLOAT_t*next_rewards_ptr = <FLOAT_t*> self._next_rewards.data
+        cdef FLOAT_t*terminals_ptr = <FLOAT_t*> self._terminals.data
+        cdef FLOAT_t*n_steps_ptr = <FLOAT_t*> self._n_steps.data
 
         # get pointers to transitions
         cdef int i
@@ -1088,12 +1084,12 @@ cdef class TransitionMiniBatch:
     cdef void _assign_observation(self,
                                   int batch_index,
                                   TransitionPtr ptr,
-                                  void* observations_ptr,
+                                  void*observations_ptr,
                                   int n_frames,
                                   bool is_image,
                                   bool is_next) nogil:
         cdef int offset, channel, height, width
-        cdef void* src_observation_ptr
+        cdef void*src_observation_ptr
         if is_image:
             channel = ptr.get().observation_shape[0]
             height = ptr.get().observation_shape[1]
@@ -1127,11 +1123,11 @@ cdef class TransitionMiniBatch:
     cdef void _assign_action(self,
                              int batch_index,
                              TransitionPtr ptr,
-                             void* actions_ptr,
+                             void*actions_ptr,
                              bool is_discrete,
                              bool is_next) nogil:
         cdef int offset
-        cdef void* src_action_ptr
+        cdef void*src_action_ptr
         if is_discrete:
             if is_next:
                 ((<INT_t*> actions_ptr) + batch_index)[0] = ptr.get().next_action_i
@@ -1150,14 +1146,14 @@ cdef class TransitionMiniBatch:
     cdef void _assign_to_batch(self,
                                int batch_index,
                                TransitionPtr ptr,
-                               void* observations_ptr,
-                               void* actions_ptr,
-                               float* rewards_ptr,
-                               void* next_observations_ptr,
-                               void* next_actions_ptr,
-                               float* next_rewards_ptr,
-                               float* terminals_ptr,
-                               float* n_steps_ptr,
+                               void*observations_ptr,
+                               void*actions_ptr,
+                               float*rewards_ptr,
+                               void*next_observations_ptr,
+                               void*next_actions_ptr,
+                               float*next_rewards_ptr,
+                               float*terminals_ptr,
+                               float*n_steps_ptr,
                                int n_frames,
                                int n_steps,
                                float gamma,
@@ -1298,16 +1294,15 @@ cdef class TransitionMiniBatch:
     def __iter__(self):
         return iter(self._transitions)
 
-
 cdef _compute_returns(Transition transition, float gamma, int n_frames):
     cdef vector[TransitionPtr] transitions
     cdef TransitionPtr ptr
     cdef int i, channel, width, height, offset
     cdef bool is_image
     cdef float R
-    cdef void* observations_ptr
-    cdef FLOAT_t* returns_ptr
-    cdef FLOAT_t* terminals_ptr
+    cdef void*observations_ptr
+    cdef FLOAT_t*returns_ptr
+    cdef FLOAT_t*terminals_ptr
     cdef np.ndarray observations, returns, terminals
 
     # iterate through transitions
@@ -1340,7 +1335,7 @@ cdef _compute_returns(Transition transition, float gamma, int n_frames):
             ptr = transitions[i]
 
             # compute discounted return
-            R += (gamma**i) * ptr.get().next_reward
+            R += (gamma ** i) * ptr.get().next_reward
             returns_ptr[i] = R
             terminals_ptr[i] = ptr.get().terminal
 
@@ -1369,7 +1364,6 @@ cdef _compute_returns(Transition transition, float gamma, int n_frames):
 
     return observations, returns, terminals
 
-
 def compute_lambda_return(transition, algo, gamma, lam, n_frames):
     observations, returns, terminals = _compute_returns(transition,
                                                         gamma,
@@ -1379,7 +1373,7 @@ def compute_lambda_return(transition, algo, gamma, lam, n_frames):
     gammas = gamma ** (np.arange(returns.shape[0]) + 1)
     returns += gammas * values * (1.0 - terminals)
 
-    lambdas = lam**np.arange(returns.shape[0])
+    lambdas = lam ** np.arange(returns.shape[0])
     lambda_return = (1.0 - lam) * np.sum(lambdas[:-1] * returns[:-1])
     lambda_return += lambdas[-1] * returns[-1]
 
