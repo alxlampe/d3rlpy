@@ -1,3 +1,4 @@
+import h5py
 import numpy as np
 
 from abc import ABCMeta, abstractmethod
@@ -23,6 +24,7 @@ class TransitionQueue:
         cursor (int): the current cursor pointing to the position to insert.
 
     """
+
     def __init__(self, maxlen=None):
         self.maxlen = maxlen
         self.buffer = []
@@ -154,6 +156,7 @@ class ReplayBuffer(Buffer):
         action_size (int): action size.
 
     """
+
     def __init__(self, maxlen, env, episodes=None):
         # temporary cache to hold transitions for an entire episode
         self.prev_observation = None
@@ -230,3 +233,105 @@ class ReplayBuffer(Buffer):
 
     def __len__(self):
         return self.size()
+
+    def _create_numpy_arrays(self):
+        observations = []
+        actions = []
+        rewards = []
+        terminals = []
+        ep_terminals = []
+        is_new_transition = True
+        for transition in self.transitions:
+            if transition.prev_transition is None:
+                terminals.append(False)
+                ep_terminals.append(False)
+            observations.append(transition.observation)
+            actions.append(transition.action)
+            rewards.append(transition.reward)
+            terminals.append(transition.terminal)
+            if transition.next_transition is None:
+                observations.append(transition.next_observation)
+                actions.append(transition.next_action)
+                rewards.append(transition.next_reward)
+                ep_terminals.append(True)
+            else:
+                ep_terminals.append(False)
+        observations = np.stack(observations, axis=0)
+        actions = np.stack(actions, axis=0)
+        rewards = np.stack(rewards, axis=0)
+        terminals = np.stack(terminals, axis=0)
+        ep_terminals = np.stack(ep_terminals, axis=0)
+        return observations, actions, rewards, terminals, ep_terminals
+
+    def dump_data(self, fname):
+        """ Saves dataset as HDF5.
+
+        Args:
+            fname (str): file path.
+
+        """
+        observations, actions, rewards, terminals, ep_terminals = self._create_numpy_arrays()
+        with h5py.File(fname, 'w') as f:
+            f.create_dataset('observations', data=observations)
+            f.create_dataset('actions', data=actions)
+            f.create_dataset('rewards', data=rewards)
+            f.create_dataset('terminals', data=terminals)
+            f.create_dataset('ep_terminals', data=ep_terminals)
+            f.flush()
+
+    def load_data(self, fname):
+        """ Loads dataset from HDF5.
+
+        Args:
+            fname (str): file path.
+
+        """
+        with h5py.File(fname, 'r') as f:
+            observations = f['observations'][()]
+            actions = f['actions'][()]
+            rewards = f['rewards'][()]
+            terminals = f['terminals'][()]
+            ep_terminals = f['ep_terminals'][()]
+
+        self._to_transitions(observations, actions, rewards, terminals, ep_terminals)
+
+    def _to_transitions(self, states, actions, rewards, terminals, ep_terminals):
+        transitons = []
+        num_data = states.shape[0]
+        prev_transition = None
+        i = 0
+        while True:
+            observation = states[i]
+            action = actions[i]
+            reward = rewards[i]
+            next_observation = states[i + 1]
+            next_action = actions[i + 1]
+            next_reward = rewards[i + 1]
+            terminal = terminals[i + 1]
+            ep_terminal = ep_terminals[i + 1]
+            transition = Transition(observation_shape=observation.shape,
+                                    action_size=action.size,
+                                    observation=observation,
+                                    action=action,
+                                    reward=reward,
+                                    next_observation=next_observation,
+                                    next_action=next_action,
+                                    next_reward=next_reward,
+                                    terminal=terminal,
+                                    prev_transition=prev_transition)
+
+            # set pointer to the next transition
+            if prev_transition:
+                prev_transition.next_transition = transition
+
+            if ep_terminal:
+                prev_transition = None
+                i += 2
+            else:
+                prev_transition = transition
+                i += 1
+
+            self.transitions.append(transition)
+
+            if i >= num_data - 1:
+                break
