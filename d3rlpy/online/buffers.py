@@ -1,5 +1,6 @@
 import h5py
 import numpy as np
+from tqdm import tqdm
 
 from abc import ABCMeta, abstractmethod
 from collections import deque
@@ -241,7 +242,9 @@ class ReplayBuffer(Buffer):
         terminals = []
         ep_terminals = []
         is_new_transition = True
-        for transition in self.transitions:
+        pbar = tqdm(desc="Saving buffer data", total=len(self.transitions))
+        for i, transition in enumerate(self.transitions):
+            pbar.update(i)
             if transition.prev_transition is None:
                 terminals.append(False)
                 ep_terminals.append(False)
@@ -256,6 +259,7 @@ class ReplayBuffer(Buffer):
                 ep_terminals.append(True)
             else:
                 ep_terminals.append(False)
+        pbar.close()
         observations = np.stack(observations, axis=0)
         actions = np.stack(actions, axis=0)
         rewards = np.stack(rewards, axis=0)
@@ -300,7 +304,9 @@ class ReplayBuffer(Buffer):
         num_data = states.shape[0]
         prev_transition = None
         i = 0
+        pbar = tqdm(desc="Loading buffer dataset", total=num_data)
         while True:
+            pbar.update(i)
             observation = states[i]
             action = actions[i]
             reward = rewards[i]
@@ -335,3 +341,4 @@ class ReplayBuffer(Buffer):
 
             if i >= num_data - 1:
                 break
+        pbar.close()
